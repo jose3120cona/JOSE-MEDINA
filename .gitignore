@@ -1,32 +1,213 @@
-# Prerequisites
-*.d
+int valorFotoCelda; // Variable para almacenar el valor leído por el sensor de luz (LDR)
+unsigned long tiempoInicio; // Variable para almacenar el tiempo de inicio de una acción relacionada con la luz
+const int fotoCeldaPin = 0; // Pin analógico al que está conectado el sensor de luz (LDR)
+const int ledPin = 2; // Pin digital al que está conectado el LED
+int Noche = 0; // Variable para rastrear si es de noche (valor 1) o no (valor 0)
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+const int botonPin = A3; // Pin analógico al que está conectado el botón de la LDR Y PIR
+bool estado_anterior = false; // Variable booleana para almacenar el estado anterior del botón
+bool ledEncendido = false; // Variable booleana para almacenar el estado del LED
 
-# Precompiled Headers
-*.gch
-*.pch
+const int PIRPin = A2; // Pin analógico al que está conectado el sensor de movimiento PIR
+bool pirDetectado = false; // Variable booleana para rastrear si se ha detectado movimiento
+unsigned long tiempoPIR = 0; // Variable para almacenar el tiempo desde la última detección de movimiento
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
+#include <Wire.h> // Incluye la librería para la comunicación I2C (Wire)
+#include <LiquidCrystal_I2C.h> // Incluye la librería para el control de la LCD (I2C)
+#include <SPI.h> // Incluye la librería para la comunicación SPI
+#include <MFRC522.h> // Incluye la librería para el lector RFID (MFRC522)
 
-# Fortran module files
-*.mod
-*.smod
+#define SS_PIN 10 // Define el pin SS (Slave Select) para la comunicación SPI
+#define RST_PIN 9 // Define el pin RST (Reset) para el lector RFID
+#define GREEN_LED 6 // Define el pin para el LED verde
+#define RED_LED 7 // Define el pin para el LED rojo
+#define BLUE_LED 8 // Define el pin para el LED azul
+#define GREEN_BUTTON_PIN 5 // Define el pin para el botón verde
+#define RED_BUTTON_PIN 3 // Define el pin para el botón rojo
+#define BLUE_BUTTON_PIN 4 // Define el pin para el botón azul
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
+bool greenButtonState = LOW; // Variable booleana para almacenar el estado del botón verde
+bool redButtonState = LOW; // Variable booleana para almacenar el estado del botón rojo
+bool blueButtonState = LOW; // Variable booleana para almacenar el estado del botón azul
 
-# Executables
-*.exe
-*.out
-*.app
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Inicializa un objeto LCD I2C con dirección 0x27, 16 columnas y 2 filas
+MFRC522 mfrc522(SS_PIN, RST_PIN); // Inicializa un objeto para el lector RFID con los pines SS y RST
+
+bool accessGranted = false; // Variable booleana para rastrear si se ha otorgado acceso
+
+// Define una estructura para almacenar información de tarjetas autorizadas
+struct AuthorizedCard {
+  byte id[4]; // Almacena el ID de la tarjeta RFID (4 bytes)
+  String name; // Almacena el nombre asociado a la tarjeta
+};
+
+// Crea un arreglo de tarjetas autorizadas con sus IDs y nombres
+AuthorizedCard authorizedCards[] = {
+  {{0x90, 0x9D, 0x16, 0x20}, "JOSE SANTIAGO MEDINA MARMOLEJO"},
+  {{0x93, 0x3F, 0xA9, 0x1D}, "SIXTO HUMBERTO GONZALEZ PAEZ"}
+};
+
+bool ledOn[] = {false, false, false}; // Arreglo para rastrear el estado de los LEDs
+
+// Configuración inicial del programa
+void setup() {
+  pinMode(ledPin, OUTPUT); // Configura el pin del LED como salida
+  pinMode(botonPin, INPUT); // Configura el pin del botón como entrada
+  pinMode(PIRPin, INPUT); // Configura el pin del sensor PIR como entrada
+  pinMode(GREEN_BUTTON_PIN, INPUT_PULLUP); // Configura el botón verde con resistencia pull-up interna
+  pinMode(RED_BUTTON_PIN, INPUT_PULLUP); // Configura el botón rojo con resistencia pull-up interna
+  pinMode(BLUE_BUTTON_PIN, INPUT_PULLUP); // Configura el botón azul con resistencia pull-up interna
+  Serial.begin(9600); // Inicia la comunicación serial a 9600 baudios
+  SPI.begin(); // Inicia la comunicación SPI
+  mfrc522.PCD_Init(); // Inicializa el lector RFID
+  lcd.init(); // Inicializa el LCD
+  lcd.backlight(); // Enciende la retroiluminación del LCD
+  for (int i = 0; i < 3; i++) {
+    pinMode(GREEN_LED + i, OUTPUT); // Configura los pines de los LEDs como salidas
+    digitalWrite(GREEN_LED + i, LOW); // Apaga los LEDs al inicio
+  }
+  lcd.clear(); // Borra el contenido del LCD
+  lcd.setCursor(0, 0); // Establece el cursor en la primera fila y columna
+  lcd.print("IDENTIFICACION"); // Muestra "IDENTIFICACION" en el LCD
+}
+
+// Bucle principal del programa
+void loop() {
+  // Código para el botón
+  bool estado = digitalRead(botonPin); // Lee el estado del botón
+  if (estado != estado_anterior) { // Comprueba si el estado del botón ha cambiado
+    if (estado == LOW) { // Si el botón se presiona (estado bajo)
+      ledEncendido = !ledEncendido; // Invierte el estado del LED
+      digitalWrite(ledPin, ledEncendido); // Enciende o apaga el LED según el estado
+    }
+    estado_anterior = estado; // Actualiza el estado anterior del botón
+  }
+
+  // Código para el sensor de luz (LDR)
+  valorFotoCelda = analogRead(fotoCeldaPin); // Lee el valor del sensor de luz
+  if (valorFotoCelda < 300 && Noche == 0) { // Comprueba si es oscuro y no se ha registrado como noche
+    digitalWrite(ledPin, HIGH); // Enciende el LED
+    tiempoInicio = millis(); // Registra el tiempo de inicio
+    Noche = 1; // Marca que es de noche
+  }
+
+  if (millis() - tiempoInicio >= 3000 && !ledEncendido) { // Si han pasado 3 segundos y el LED no está encendido
+    digitalWrite(ledPin, LOW); // Apaga el LED
+  }
+
+  if (400 < valorFotoCelda && Noche == 1) { // Si es claro y se registró como noche
+    Noche = 0; // Marca que ya no es de noche
+    if (!ledEncendido) { // Si el LED no está encendido
+      digitalWrite(ledPin, LOW); // Apaga el LED
+    }
+  }
+
+  // Código para el sensor de movimiento PIR
+  if (valorFotoCelda < 300) { // Comprueba si es oscuro
+    int value = digitalRead(PIRPin); // Lee el estado del sensor PIR
+    if (value == HIGH) { // Si se detecta movimiento
+      pirDetectado = true; // Marca que se ha detectado movimiento
+      tiempoPIR = millis(); // Registra el tiempo de detección
+      digitalWrite(ledPin, HIGH); // Enciende el LED
+    }
+
+    if (pirDetectado && millis() - tiempoPIR >= 5000) { // Si se ha detectado movimiento y han pasado 5 segundos
+      pirDetectado = false; // Marca que ya no se ha detectado movimiento
+      digitalWrite(ledPin, LOW); // Apaga el LED
+    }
+  }
+
+  // Código para leer el estado de los pulsadores y controlar los LEDs
+  bool buttonState[] = {digitalRead(GREEN_BUTTON_PIN), digitalRead(RED_BUTTON_PIN), digitalRead(BLUE_BUTTON_PIN)};
+  for (int i = 0; i < 3; i++) {
+    if (buttonState[i] == LOW) { // Si se presiona un botón (estado bajo)
+      digitalWrite(GREEN_LED + i, !digitalRead(GREEN_LED + i)); // Invierte el estado del LED correspondiente
+      ledOn[i] = !ledOn[i]; // Invierte el estado del LED en el arreglo
+      delay(250); // Espera 250 milisegundos para evitar múltiples detecciones por rebote
+    }
+  }
+
+  // Código para el lector de tarjetas RFID
+  if (mfrc522.PICC_IsNewCardPresent() && mfrc522.PICC_ReadCardSerial()) { // Si se detecta una nueva tarjeta RFID
+    String cardName = getCardName(); // Obtiene el nombre de la tarjeta
+    accessGranted = checkAccess(); // Comprueba si se otorga acceso
+    showResult(accessGranted, cardName); // Muestra el resultado en el LCD
+    delay(1000); // Espera 1 segundo
+    lcd.clear(); // Borra el contenido del LCD
+    lcd.setCursor(0, 0); // Establece el cursor en la primera fila y columna
+    lcd.print("IDENTIFICACION"); // Muestra "IDENTIFICACION" en el LCD
+    delay(1000); // Espera 1 segundo
+  }
+}
+
+// Función para obtener el nombre de la tarjeta RFID
+String getCardName() {
+  byte readCardID[4]; // Arreglo para almacenar el ID de la tarjeta leída
+  for (byte i = 0; i < 4; i++) {
+    readCardID[i] = mfrc522.uid.uidByte[i]; // Copia el ID de la tarjeta al arreglo
+  }
+
+  for (int i = 0; i < sizeof(authorizedCards) / sizeof(authorizedCards[0]); i++) { // Recorre el arreglo de tarjetas autorizadas
+    if (compareCardIDs(readCardID, authorizedCards[i].id)) { // Compara el ID leído con los IDs autorizados
+      return authorizedCards[i].name; // Devuelve el nombre de la tarjeta si es autorizada
+    }
+  }
+  return "Desconocido"; // Devuelve "Desconocido" si la tarjeta no está autorizada
+}
+
+// Función para comprobar si se otorga acceso
+bool checkAccess() {
+  byte readCardID[4]; // Arreglo para almacenar el ID de la tarjeta leída
+  for (byte i = 0; i < 4; i++) {
+    readCardID[i] = mfrc522.uid.uidByte[i]; // Copia el ID de la tarjeta al arreglo
+  }
+
+  for (int i = 0; i < sizeof(authorizedCards) / sizeof(authorizedCards[0]); i++) { // Recorre el arreglo de tarjetas autorizadas
+    if (compareCardIDs(readCardID, authorizedCards[i].id)) { // Compara el ID leído con los IDs autorizados
+      lcd.print("BIENVENIDO"); // Muestra "BIENVENIDO" en el LCD
+      return true; // Otorga acceso si la tarjeta es autorizada
+    }
+  }
+
+  return false; // Niega el acceso si la tarjeta no está autorizada
+}
+
+// Función para comparar dos IDs de tarjetas RFID
+bool compareCardIDs(byte id1[], byte id2[]) {
+  for (byte i = 0; i < 4; i++) {
+    if (id1[i] != id2[i]) { // Compara cada byte del ID
+      return false; // Devuelve falso si los IDs no coinciden
+    }
+  }
+  return true; // Devuelve verdadero si los IDs coinciden
+}
+
+// Función para mostrar el resultado en el LCD
+void showResult(bool granted, String cardName) {
+  lcd.clear(); // Borra el contenido del LCD
+  if (granted) { // Si se otorga acceso
+    lcd.setCursor(0, 1); // Establece el cursor en la segunda fila
+    lcd.print("BIENVENIDO"); // Muestra "BIENVENIDO" en el LCD
+    if (cardName.length() > 16) { // Si el nombre de la tarjeta es demasiado largo para una sola línea del LCD
+      for (int i = 0; i < cardName.length() - 16 + 1; i++) { // Desplaza el nombre en el LCD
+        lcd.clear(); // Borra el contenido del LCD
+        lcd.setCursor(0, 0); // Establece el cursor en la primera fila
+        lcd.print("BIENVENIDO"); // Muestra "BIENVENIDO" en el LCD
+        lcd.setCursor(0, 1); // Establece el cursor en la segunda fila
+        lcd.print(cardName.substring(i, i + 16)); // Muestra una parte del nombre en el LCD
+        delay(300); // Espera 300 milisegundos antes de mostrar la siguiente parte
+      }
+    } else {
+      lcd.setCursor(0, 1); // Establece el cursor en la segunda fila
+      lcd.print(cardName); // Muestra el nombre completo en el LCD
+    }
+    delay(1); // Pequeña pausa
+    for (int i = 0; i < 3; i++) { // Enciende los LEDs
+      digitalWrite(GREEN_LED + i, HIGH);
+    }
+  } else { // Si se niega el acceso
+    lcd.setCursor(0, 0); // Establece el cursor en la primera fila
+    lcd.print("Acceso Denegado"); // Muestra "Acceso Denegado" en el LCD
+    delay(500); // Espera 500 milisegundos
+  }
+}
