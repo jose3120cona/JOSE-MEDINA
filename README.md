@@ -1,2 +1,1 @@
 # JOSE-MEDINA
-codigo (LDR,PIR,3PB,LCD,RFID)
